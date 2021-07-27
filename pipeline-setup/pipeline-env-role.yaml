@@ -1,0 +1,198 @@
+# =============================================================================
+#   File    :   pipeline-env-role.yaml
+#   Purpose :   Create cross-account IAM role in each environment account
+# =============================================================================
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+    CloudFormation template that creates a cross-account IAM role in each 
+    environment account
+
+# =============================================================================
+#   CloudFormation - Parameters
+# =============================================================================
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name that stores CodeBuild Artifacts
+  SharedServicesAccountId:
+    Type: String
+    Description: AWS Shared Services Account ID
+  CustomerMasterKeyArn:
+    Type: String
+    Description: ARN of the KMS CMK created in the Shared Account
+  Environment:
+    Type: String
+    Description: Account Environments (Stages)
+    AllowedValues:
+      - PRD
+      - STG
+      - DEV
+    ConstraintDescription: Environment Must Be PRD, STG or DEV
+  ProjectAbbreviation:
+    Type: String
+    Default: CICD
+    Description: Project Abbreviation
+
+# =============================================================================
+#   CloudFormation - Mappings
+# =============================================================================
+Mappings:
+  EnvironmentMapping:
+    Environment:
+      PRD: Production
+      STG: Staging
+      DEV: Development
+
+# =============================================================================
+#   CloudFormation - Resources
+# =============================================================================
+Resources:
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PipelineRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${SharedServicesAccountId}:root
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucket
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:Put
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+                  - !Sub arn:aws:s3:::${S3BucketName}
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyKMS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey*
+                  - kms:Encrypt
+                  - kms:ReEncrypt*
+                  - kms:Decrypt
+                Resource: 
+                  - !Ref CustomerMasterKeyArn
+      Tags: 
+        - Key: Name
+          Value: CICD
+        - Key: Environment
+          Value: !FindInMap [EnvironmentMapping, Environment, !Ref Environment]
+
+  CloudFormationDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PipelineDeployRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyCloudFormation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - iam:PassRole
+                Resource:
+                  - '*'
+              - Effect: Allow
+                Action: 
+                  - cloudformation:*
+                  - codebuild:*
+                Resource:
+                  - '*'
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyIAM
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/*
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:CreateServiceLinkedRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/*
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject*
+                  - s3:GetBucket*
+                  - s3:List*
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+                  - !Sub arn:aws:s3:::${S3BucketName}
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyKMS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource:
+                  - !Ref CustomerMasterKeyArn
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyResources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  # Note: Modify accordingly
+                  - lambda:*
+                  - codedeploy:*
+                  - secretsmanager:*
+                  - rds:*
+                Resource:
+                  - '*'
+      Tags: 
+        - Key: Name
+          Value: CICD
+        - Key: Environment
+          Value: !FindInMap [EnvironmentMapping, Environment, !Ref Environment]
+
+# ===========================================================================
+#   CloudFormation - Outputs
+# ===========================================================================
+Outputs:
+  CloudFormationRole:
+    Description: AWS CloudPipeline Execution Role ARN
+    Value: !GetAtt CodePipelineRole.Arn
+
+  CloudFormationDeployRole:
+    Description: AWS CloudFormation Deploy Role ARN
+    Value: !GetAtt CloudFormationDeployRole.Arn
