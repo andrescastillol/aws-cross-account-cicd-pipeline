@@ -1,0 +1,69 @@
+# =============================================================================
+#   File    :   pipeline-s3.yaml
+#   Purpose :   Create a S3 Bucket to store the CI/CD pipeline source code
+# =============================================================================
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+    CloudFormation template that creates a S3 Bucket to store the source code
+
+# =============================================================================
+#   CloudFormation - Parameters
+# =============================================================================
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: Bucket Name That Stores The Source Code
+  DevelopmentAccountId:
+    Type: String
+    Description: AWS Development (DEV) Account ID
+  StagingAccountId:
+    Type: String
+    Description: AWS Staging (STG) Account ID
+  ProductionAccountId:
+    Type: String
+    Description: AWS Production (PRD) Account ID
+
+# =============================================================================
+#   CloudFormation - Resources
+# =============================================================================
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${S3BucketName}
+      AccessControl: BucketOwnerFullControl
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'aws:kms'
+              KMSMasterKeyID: !ImportValue CLF-SHR-CICD-PipelineMasterKey-KMS
+      VersioningConfiguration:
+        Status: Enabled
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Sub ${DevelopmentAccountId}
+                - !Sub ${StagingAccountId}
+                - !Sub ${ProductionAccountId}
+            Action:
+              - s3:*
+            Resource:
+              - !Sub arn:aws:s3:::${S3BucketName}
+              - !Sub arn:aws:s3:::${S3BucketName}/*
+
+# ===========================================================================
+#   CloudFormation - Outputs
+# ===========================================================================
+Outputs:
+  S3Bucket:
+    Description: S3 CodeBuild Artifact Bucket ARN
+    Value: !GetAtt S3Bucket.Arn
