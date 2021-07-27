@@ -1,0 +1,380 @@
+# =============================================================================
+#   File    :   pipeline-role.yaml
+#   Purpose :   Create IAM roles and policies for the CI/CD Pipeline
+# =============================================================================
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+    CloudFormation template that creates the IAM Roles and Policies for the 
+    CI/CD Pipeline
+
+# =============================================================================
+#   CloudFormation - Parameters
+# =============================================================================
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name that store the artifacts built by CodeBuild
+  Environment:
+    Type: String
+    Default: SHR
+    Description: AWS Shared Services (SHR) Account
+  ProjectAbbreviation:
+    Type: String
+    Default: CICD
+    Description: Project Name Abbreviation
+  DevelopmentAccountId:
+    Type: String
+    Description: AWS Development (DEV) Account ID
+  StagingAccountId:
+    Type: String
+    Description: AWS Staging (STG) Account ID
+  ProductionAccountId:
+    Type: String
+    Description: AWS Production (PRD) Account ID
+
+# =============================================================================
+#   CloudFormation - Resources
+# =============================================================================
+Resources:
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PipelineBuildRole
+      Description: IAM CodeBuild Service Role for the CI/CD Pipeline
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 
+              - sts:AssumeRole
+            Principal:
+              Service: 
+                - codebuild.amazonaws.com
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+      Path: /
+      Policies:
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyIAM
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  iam:PassRole
+                Resource:
+                  - '*'
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject*
+                  - s3:GetObjectVersion*
+                  - s3:GetBucketPolicy*
+                  - s3:ListBucket*
+                  - s3:PutObject*
+                  - s3:List*
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+                  - !Sub arn:aws:s3:::${S3BucketName}
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyKMS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                Resource: 
+                  - !ImportValue CLF-SHR-CICD-PipelineMasterKey-KMS
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyKMS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - arn:aws:logs:*:*:*
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyCodeBuild
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - codebuild:StartBuild
+                  - codebuild:StopBuild
+                  - codebuild:BatchGetBuilds
+                Resource:
+                  - '*'
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyResources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                  - ecs:*
+                  - ecr:*
+                  - cloudformation:*
+                Resource: 
+                  - '*'
+      Tags: 
+        - Key: Name
+          Value: CICD
+        - Key: Environment
+          Value: Shared Services
+
+  CodePipelineSourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PipelineSourceRole
+      Description: IAM CodePipeline source action role for the CI/CD Pipeline
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+      Path: /
+      Policies:
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject*
+                  - s3:GetBucket*
+                  - s3:List*
+                  - s3:DeleteObject*
+                  - s3:PutObject*
+                  - s3:Abort*
+                Resource: 
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+                  - !Sub arn:aws:s3:::${S3BucketName}
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyKMS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                Resource: 
+                  - !ImportValue CLF-SHR-CICD-PipelineMasterKey-KMS
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyCodeCommit
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:CancelUploadArchive
+                Resource:
+                  # Note: Open to all repositories in the Shared Services Account
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:*
+      Tags: 
+        - Key: Name
+          Value: CICD
+        - Key: Environment
+          Value: Shared Services
+
+  CodePipelineDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PipelineDeployRole
+      Description: IAM CodePipeline deploy action role for the CI/CD Pipeline
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+      Path: /
+      Policies:
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyIAM
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - '*'
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetBucket
+                  - s3:List
+                Resource: 
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+                  - !Sub arn:aws:s3:::${S3BucketName}
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyKMS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: 
+                  - !ImportValue CLF-CMN-PipelineMasterKey-KMS
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyCloudFormation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:DescribeStack
+                  - cloudformation:GetStackPolicy
+                  - cloudformation:GetTemplate
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:UpdateStack
+                  - cloudformation:ValidateTemplate
+                Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/*
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyResources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow            
+                Action:
+                  - '*'
+                Resource:
+                  - '*'
+      Tags: 
+        - Key: Name
+          Value: CICD
+        - Key: Environment
+          Value: Shared Services
+
+  CrossAccountPipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PipelineRole
+      Description: IAM Cross Account CodePipeline role for the CI/CD Pipeline
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - codepipeline.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject*
+                  - s3:GetBucket*
+                  - s3:List*
+                  - s3:DeleteObject*
+                  - s3:PutObject*
+                  - s3:Abort*
+                Resource: 
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+                  - !Sub arn:aws:s3:::${S3BucketName}
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - arn:aws:logs:*:*:*
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicyKMS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:ReEncrypt*
+                  - kms:GenerateDataKey*
+                Resource: 
+                  - !ImportValue CLF-CMN-PipelineMasterKey-KMS
+        - PolicyName: !Sub IAM-${Environment}-${ProjectAbbreviation}-PolicySTS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource:
+                  - !Sub arn:aws:iam::${DevelopmentAccountId}:role/IAM-DEV-CICD-PipelineRole
+                  - !Sub arn:aws:iam::${StagingAccountId}:role/IAM-STG-CICD-PipelineRole
+                  - !Sub arn:aws:iam::${ProductionAccountId}:role/IAM-PRD-CICD-PipelineRole
+                  - !GetAtt CodeBuildRole.Arn
+                  - !GetAtt CodePipelineSourceRole.Arn
+                  - !GetAtt CodePipelineDeployRole.Arn
+      Tags: 
+        - Key: Name
+          Value: CICD
+        - Key: Environment
+          Value: Shared Services
+
+# ===========================================================================
+#   CloudFormation - Outputs
+# ===========================================================================
+Outputs:
+  CodeBuildRole:
+    Description: AWS CodeBuild Service Role for the CI/CD Pipeline
+    Value: !GetAtt CodeBuildRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-BuildRole
+  
+  CrossAccountPipelineRole:
+    Description: AWS Cross-Account Pipeline Role for the CI/CD Pipeline
+    Value: !GetAtt CrossAccountPipelineRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-CrossAccountRole
+
+  CodePipelineSourceRole:
+    Description: AWS CodePipeline Source Action Role for the CI/CD Pipeline
+    Value: !GetAtt CodePipelineSourceRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-SourceRole
+
+  CodePipelineDeployRole:
+    Description: AWS CodePipeline Deploy Action Role for the CI/CD Pipeline
+    Value: !GetAtt CodePipelineDeployRole.Arn 
+    Export:
+      Name: !Sub ${AWS::StackName}-DeployRole
