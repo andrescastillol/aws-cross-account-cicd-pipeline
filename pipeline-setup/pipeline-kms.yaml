@@ -1,0 +1,104 @@
+# =============================================================================
+#   File    :   pipeline-kms.yaml
+#   Purpose :   Create Customer Managed Key (CMk) in AWS KMS
+# =============================================================================
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+    CloudFormation template that creates Customer Master Keys (CMK) in AWS Key 
+    Management Service (AWS KMS) to grant access to the DEV, STG, and PRD
+    accounts
+
+# =============================================================================
+#   CloudFormation - Parameters
+# =============================================================================
+Parameters:
+  DevelopmentAccountId:
+    Type: String
+    Description: AWS Development (DEV) Account ID
+  StagingAccountId:
+    Type: String
+    Description: AWS Staging (STG) Account ID
+  ProductionAccountId:
+    Type: String
+    Description: AWS Production (PRD) Account ID
+  CrossAccountCondition:
+    Type: String
+    Default: false
+    Description: Conditionally add the roles based on condition
+
+# =============================================================================
+#   CloudFormation - Conditions
+# =============================================================================
+# Note: Add roles based on condition
+Conditions:
+  AddCrossAccountRoles:
+    !Equals [ !Ref CrossAccountCondition, true ]
+
+# =============================================================================
+#   CloudFormation - Resources
+# =============================================================================
+Resources:
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: AWS KMS Key used by Assumed Roles in DEV/STG/PRD accounts to Encrypt/Decrypt code
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: !Ref AWS::StackName
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal: 
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action:
+              - kms:*
+            Resource: 
+              - '*'
+          - Sid: Allow the use of the key for CryptoGraphy
+            Effect: Allow
+            Principal:
+              AWS: !If
+                - AddCrossAccountRoles
+                  # Note: If condition is True
+                  # Note: Only Cross-Account Roles are authorized to use KMS
+                - - !Sub arn:aws:iam::${DevelopmentAccountId}:role/IAM-DEV-CICD-PipelineRole
+                  - !Sub arn:aws:iam::${DevelopmentAccountId}:role/IAM-DEV-CICD-PipelineDeployRole
+                  - !Sub arn:aws:iam::${StagingAccountId}:role/IAM-STG-CICD-PipelineRole
+                  - !Sub arn:aws:iam::${StagingAccountId}:role/IAM-STG-CICD-PipelineDeployRole
+                  - !Sub arn:aws:iam::${ProductionAccountId}:role/IAM-PRD-CICD-PipelineRole
+                  - !Sub arn:aws:iam::${ProductionAccountId}:role/IAM-PRD-CICD-PipelineDeployRole
+                  # Note: If condition is False
+                - - !Sub arn:aws:iam::${DevelopmentAccountId}:root
+                  - !Sub arn:aws:iam::${StagingAccountId}:root
+                  - !Sub arn:aws:iam::${ProductionAccountId}:root
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: 
+              - '*'
+      Tags: 
+        - Key: Name
+          Value: CICD
+        - Key: Environment
+          Value: Shared Services
+
+  KMSAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/pipeline
+      TargetKeyId: !Ref KMSKey
+
+
+# ===========================================================================
+#   CloudFormation Outputs
+# ===========================================================================
+Outputs:
+  CustomerMasterKey:
+    Description: AWS Customer Managed Key (CMK) ARN
+    Value: !GetAtt KMSKey.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-KMS
